@@ -899,3 +899,15 @@ img{display:block}
 .content{position:relative}
 .room-split{position:absolute;inset:0;display:grid;grid-template-rows:minmax(0,1fr) minmax(0,1fr);gap:0;flex:none;margin:0}
 .info-half{border-bottom:1px solid rgba(255,255,255,.12)}
+
+/* 웅교 라벨: 대각선 균열 오른쪽에서 시작 */
+.half.woonggyo .who-name{left:max(16px, calc(27.6% - var(--cut) + 16px))}
+.half.woonggyo .cta{left:max(14px, calc(27.6% - var(--cut) + 14px))}
+
+/* 데스크톱: 전신이 잘리지 않게 contain + 가장자리 페이드 */
+@media (min-width:820px){
+  .half .shot{object-fit:cover;object-position:76% 16%}
+  .half.woonggyo .shot{object-position:50% 30%}
+  .half.woonggyo .who-name{left:calc(27.6% - var(--cut) + 40px)}
+  .half.woonggyo .cta{left:calc(27.6% - var(--cut) + 34px)}
+}
