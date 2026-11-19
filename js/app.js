@@ -571,7 +571,7 @@
   function roomHTML() {
     var p = curProfile();
     var chatCount = getChat().length;
-    return '' +
+    return '<div class="room"><div class="room-inner">' +
     '<header class="topbar room-top">' +
       '<div class="rt-row">' + brandHTML(true) +
         '<button class="switch-btn back" data-act="go-home" title="대결 화면으로">←</button>' +
@@ -586,7 +586,8 @@
       }).join('') +
     '</nav>' +
 
-    '<main class="content" id="content"></main>';
+    '<main class="content" id="content"></main>' +
+    '</div></div>';
   }
 
   function chatHalfHTML() {
