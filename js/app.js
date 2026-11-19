@@ -965,6 +965,7 @@
   /* ---------------- 라우팅/렌더 ---------------- */
   function currentTab() {
     var h = (location.hash || '').replace('#', '');
+    if (h === 'home') return 'home';
     if (['chat', 'lakers', 'warriors', 'h2h'].indexOf(h) >= 0) return h;
     return null;
   }
@@ -972,8 +973,8 @@
   function render() {
     var app = el('app');
     var tab = currentTab();
-    if (!state.profile) {
-      state.tab = tab || 'chat';
+    if (!state.profile || tab === 'home') {
+      state.tab = (tab && tab !== 'home') ? tab : 'chat';
       app.innerHTML = landingHTML() + (state.modal ? modalHTML() : '');
       return;
     }
@@ -1010,7 +1011,8 @@
     state.profile = who;
     store.set(K.profile, who);
     state.modal = null;
-    if (!currentTab()) history.replaceState(null, '', '#chat');
+    var t = currentTab();
+    if (!t || t === 'home') history.replaceState(null, '', '#chat');
     render();
     pollLive();
     startPolling();
@@ -1046,8 +1048,8 @@
     }
     if (act === 'go-home') {
       state.modal = null;
-      location.hash = '';
-      render();
+      if (location.hash === '#home') render();
+      else location.hash = '#home';
       return;
     }
     if (act === 'go-chat') {
