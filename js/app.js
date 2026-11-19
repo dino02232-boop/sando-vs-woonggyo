@@ -56,8 +56,8 @@
     tab: 'chat',
     live: {},
     pbp: {},
-    pbpGame: GAMES[0].id,
-    pbpOpen: false,
+    game: null,
+    gamePicked: false,
     online: false,
     attempted: false,
     updated: null,
@@ -205,13 +205,13 @@
       state.attempted = true;
       state.updated = new Date();
       state.polling = false;
-      paintScoreboard();
+      paintGame();
       return pollPlays();
     }).catch(function () {
       state.polling = false;
       state.online = false;
       state.attempted = true;
-      paintScoreboard();
+      paintGame();
     });
   }
 
@@ -234,131 +234,234 @@
         state.pbp[g.id] = rows;
       }).catch(function () {});
     });
-    return Promise.all(jobs).then(function () { paintPbp(); });
+    return Promise.all(jobs).then(function () { paintGame(); });
   }
 
-  /* ---------------- 실시간 UI ---------------- */
-  function liveTeamInfo(game) {
-    var t = TEAM[game.team];
-    var opp = game.opp;
-    var l = state.live[game.id];
-    return { t: t, opp: opp, l: l };
+  /* ---------------- 경기 화면 (상단 50%) ---------------- */
+  function gameFor(key) {
+    return GAMES.filter(function (g) { return g.team === key; })[0] || GAMES[0];
+  }
+  function chosenGame() { return gameFor(state.game); }
+  var ABBR_DISP = { GS: 'GSW', UTAH: 'UTA', NO: 'NOP', NY: 'NYK', SA: 'SAS', WSH: 'WAS', BKN: 'BKN', PHX: 'PHX' };
+  function teamAbbr(t) { return t.key === 'gs' ? 'GSW' : t.abbr; }
+  function oppAb(abbr) { return ABBR_DISP[abbr] || abbr; }
+  function pickGameDefault() {
+    var live = GAMES.filter(function (g) { var l = state.live[g.id]; return l && l.state === 'in'; });
+    if (live.length) return live[0].team;
+    var p = curProfile();
+    return (p && p.team && TEAM[p.team]) ? p.team : GAMES[0].team;
+  }
+  function selectGame(key) {
+    if (!gameFor(key)) return;
+    state.game = key;
+    state.gamePicked = true;
+    paintGame();
+  }
+
+  /* 경기 전환 바 — 두 경기를 한 번에 오가기 */
+  function switchHTML() {
+    return GAMES.map(function (g) {
+      var t = TEAM[g.team];
+      var l = state.live[g.id];
+      var on = g.team === chosenGame().team;
+      var live = !!(l && l.state === 'in');
+      var sub, line = (l && l.state !== 'pre' && l.myScore != null) ? (' · ' + l.myScore + '-' + l.oppScore) : '';
+      if (live) sub = '<span class="gdot"></span>' + esc((l.statusName === 'STATUS_HALFTIME' ? '하프타임' : (l.periodLabel || '진행 중')) + line);
+      else if (l && l.state === 'post') sub = '종료' + esc(line);
+      else sub = esc(g.time) + ' 팁오프';
+      return '<button class="gsw-btn ' + g.team + (on ? ' on' : '') + (live ? ' live' : '') + '" data-act="game-sel" data-g="' + g.team + '"' +
+        ' aria-pressed="' + (on ? 'true' : 'false') + '"' +
+        ' aria-label="' + esc(teamAbbr(t) + ' ' + (g.ha === '@' ? '@ ' : 'vs ') + ko(g.opp) + ' 경기 화면으로 전환') + '">' +
+        '<img src="' + t.logo + '" alt="">' +
+        '<span class="gsw-txt"><b>' + esc(teamAbbr(t)) + (g.ha === '@' ? ' @ ' : ' VS ') + esc(oppAb(g.opp)) + '</b>' +
+          '<span class="gsw-sub">' + sub + '</span></span>' +
+      '</button>';
+    }).join('');
   }
 
   function statusLine(game) {
     var l = state.live[game.id];
-    if (!l) {
-      return { cls: '', dot: '', text: '경기 전 · ' + game.time, live: false };
-    }
+    if (!l) return { cls: '', text: '경기 전 · ' + game.time };
     if (l.state === 'in') {
-      var txt = l.periodLabel || '진행 중';
-      if (l.statusName === 'STATUS_HALFTIME') return { cls: 'live', dot: '', text: '하프타임', live: true };
-      return { cls: 'live', dot: '', text: txt + (l.clock ? ' · ' + l.clock : ''), live: true };
+      if (l.statusName === 'STATUS_HALFTIME') return { cls: 'live', text: '하프타임' };
+      return { cls: 'live', text: (l.periodLabel || '진행 중') + (l.clock ? ' · ' + l.clock : '') };
     }
     if (l.state === 'post') {
       var d = l.detail || '종료';
-      return { cls: 'final', dot: '', text: /OT/i.test(d) ? '종료 (연장)' : '종료', live: false };
+      return { cls: 'final', text: /OT/i.test(d) ? '종료 (연장)' : '종료' };
     }
-    return { cls: '', dot: '', text: '경기 전 · ' + game.time, live: false };
+    return { cls: '', text: '경기 전 · ' + game.time };
   }
 
-  function scoreCardHTML(game) {
-    var t = TEAM[game.team];
-    var l = state.live[game.id];
-    var sl = statusLine(game);
-    var myScore = l && l.state !== 'pre' && l.myScore != null ? l.myScore : '–';
-    var oppScore = l && l.state !== 'pre' && l.oppScore != null ? l.oppScore : '–';
-    var myCls = 'score-num', oppCls = 'score-num';
+  /* 선택된 경기 스코어보드 */
+  function heroHTML() {
+    var g = chosenGame(), t = TEAM[g.team], d = D.teams[g.team], l = state.live[g.id];
+    var sl = statusLine(g);
+    var p = PROFILES[t.profile];
+    var my = l && l.state !== 'pre' && l.myScore != null ? l.myScore : '–';
+    var op = l && l.state !== 'pre' && l.oppScore != null ? l.oppScore : '–';
+    var myCls = 'gh-score', opCls = 'gh-score';
     if (l && l.state === 'post') {
       myCls += l.myWinner ? ' win' : ' lose';
-      oppCls += l.oppWinner ? ' win' : ' lose';
+      opCls += l.oppWinner ? ' win' : ' lose';
     }
-    return '' +
-      '<div class="score-card ' + game.team + '">' +
-        '<div class="score-top"><span class="who">' + esc(t.abbr === 'LAL' ? '레이커스' : '워리어스') + '</span>' +
-          '<span class="ven">' + (l && l.state === 'in' ? '<span style="color:#ff8d8d">● LIVE</span>' : esc(game.ha === '@' ? '원정' : '홈')) + ' · ' + esc(game.date) + '</span></div>' +
-        '<div class="score-main">' +
-          '<div class="score-side"><img src="' + t.logo + '" alt="' + esc(t.abbr) + '"><span class="ab">' + esc(t.abbr) + '</span></div>' +
-          '<span class="' + myCls + '">' + esc(myScore) + '</span>' +
-          '<span class="score-dash">:</span>' +
-          '<span class="' + oppCls + '">' + esc(oppScore) + '</span>' +
-          '<div class="score-side" style="margin-left:auto"><span class="ab">' + esc(game.opp) + '</span><img src="' + oppLogo(game.opp) + '" alt="' + esc(game.opp) + '"></div>' +
-        '</div>' +
-        '<div class="score-state ' + sl.cls + '"><span class="dot"></span>' +
-          (sl.cls === 'live' ? '<span class="clock">' + esc(sl.text) + '</span>' : esc(sl.text)) +
-        '</div>' +
-      '</div>';
+    return '<div class="ghero ' + g.team + '">' +
+      '<div class="gh-top">' +
+        '<span class="gh-fan ' + p.key + '">' + p.emoji + ' ' + esc(p.name) + '의 경기</span>' +
+        '<span class="gh-ven">' + esc(g.ha === '@' ? '원정' : '홈') + ' · ' + esc(g.date) + '</span>' +
+        '<span class="gh-state ' + sl.cls + '"><span class="dot"></span>' + esc(sl.text) + '</span>' +
+      '</div>' +
+      '<div class="gh-main">' +
+        '<div class="gh-side"><img src="' + t.logo + '" alt=""><span>' + esc(teamAbbr(t)) + '</span></div>' +
+        '<span class="' + myCls + '">' + esc(my) + '</span>' +
+        '<span class="gh-dash">:</span>' +
+        '<span class="' + opCls + '">' + esc(op) + '</span>' +
+        '<div class="gh-side r"><span>' + esc(oppAb(g.opp)) + '</span><img src="' + oppLogo(g.opp) + '" alt=""></div>' +
+      '</div>' +
+      '<div class="gh-foot">' + esc(d.record) + ' · 서부 ' + d.confRank + '위 · ' + esc(d.streak) + '</div>' +
+    '</div>';
   }
 
-  function paintScoreboard() {
-    var box = el('score-cards');
-    if (!box) return;
-    box.innerHTML = GAMES.map(scoreCardHTML).join('');
-    var meta = el('score-meta');
-    if (meta) {
-      var t;
-      if (!state.online && state.attempted) {
-        t = '<span class="offline">⚠ 실시간 연결 불가 — ' + esc(D.site.updatedLabel) + ' 스냅샷 표시</span>';
-      } else if (state.updated && state.online) {
-        t = '<b>' + hhmm(state.updated) + '</b> ESPN 실시간';
-      } else {
-        t = 'ESPN 실시간 연결 중…';
-      }
-      meta.innerHTML = '<span>' + t + '</span>' +
-        '<span style="margin-left:auto;color:#55556a">25초 자동 갱신</span>' +
-        '<button class="refresh" data-act="refresh" title="지금 새로고침" aria-label="새로고침"><span>⟳</span></button>';
-    }
-    paintPbp();
+  /* 선택된 경기 핵심 정보 (스타 선수 상태 · 팀 지표) */
+  function keyInfoHTML() {
+    var g = chosenGame(), d = D.teams[g.team];
+    var pl = D.players[g.team === 'lal' ? 'doncic' : 'curry'];
+    var active = pl.status === '출전 중';
+    return '<span class="gk-star"><b>' + esc(pl.name) + '</b> ' +
+        esc(pl.season.pts) + '점·' + esc(pl.season.reb) + '리바·' + esc(pl.season.ast) + '어시</span>' +
+      '<span class="gk-badge ' + (active ? 'ok' : 'out') + '">' + esc(pl.status) + '</span>' +
+      (d.injuries.length ? '<span class="gk-chip">부상 ' + d.injuries.length + '명</span>' : '');
   }
 
-  function pbpRowsHTML(game) {
-    var l = state.live[game.id];
-    var rows = state.pbp[game.id] || [];
+  /* 이 경기의 승부예측 (채팅 픽과 같은 데이터) */
+  function pickGroupHTML() {
+    var g = chosenGame(), t = TEAM[g.team];
+    var picks = getPicks()[g.id] || {};
+    var mine = picks[state.profile];
+    function opt(abbr, name, logo) {
+      var sel = mine && mine.team === abbr;
+      return '<button class="pick-opt gpick-opt' + (sel ? ' sel' : '') + '" data-act="pick" data-game="' + esc(g.id) + '" data-pick="' + esc(abbr) + '" title="' + esc(name) + ' 승 예측">' +
+        '<img src="' + logo + '" alt="">' + esc(abbr === t.abbr ? teamAbbr(t) : oppAb(abbr)) + '</button>';
+    }
+    return '<div class="gpick">' +
+      '<span class="gpick-lab" title="오늘의 승부예측">🏀</span>' +
+      opt(t.abbr, t.name, t.logo) +
+      opt(g.opp, ko(g.opp), oppLogo(g.opp)) +
+    '</div>';
+  }
+
+  function feedHeadHTML() {
+    var meta;
+    if (!state.online && state.attempted) {
+      meta = '<span class="offline">⚠ 실시간 연결 불가 · ' + esc(D.site.updatedLabel) + ' 스냅샷</span>';
+    } else if (state.online && state.updated) {
+      meta = '<b>' + hhmm(state.updated) + '</b> ESPN 실시간 · 25초 갱신';
+    } else {
+      meta = 'ESPN 실시간 연결 중…';
+    }
+    return '<span class="gf-title">📻 실시간 문자중계</span>' +
+      '<span class="gf-meta">' + meta + '</span>' +
+      '<button class="refresh" data-act="refresh" title="지금 새로고침" aria-label="새로고침"><span>⟳</span></button>';
+  }
+
+  function qLabel(p) {
+    if (p === null || p === undefined || p === '') return '';
+    var s = String(p).trim();
+    if (/^[1-4]$/.test(s)) return s + 'Q';
+    if (/^[1-4](st|nd|rd|th)/i.test(s)) return s.charAt(0) + 'Q';
+    if (/OT|오버타임/i.test(s)) return '연장';
+    var n = Number(s);
+    if (!isNaN(n)) return n > 4 ? '연장' : (n > 0 ? n + 'Q' : '');
+    return s;
+  }
+
+  function pbpRowHTML(r) {
+    var q = qLabel(r.period);
+    return '<div class="pbp-row' + (r.scoring ? ' scoring' : '') + '">' +
+      '<span class="pt-period">' + esc(q || '·') + '</span>' +
+      '<span class="pt-clock">' + esc(r.clock || '') + '</span>' +
+      '<span class="pt">' + esc(r.text) + '</span>' +
+      '<span class="pt-score">' + (r.away != null ? esc(r.away) + '-' + esc(r.home) : '') + '</span>' +
+    '</div>';
+  }
+
+  function untilTip(g) {
+    var ms = new Date(g.iso).getTime() - Date.now();
+    if (!(ms > 0)) return '곧 시작';
+    var m = Math.round(ms / 60000), h = Math.floor(m / 60);
+    m = m % 60;
+    return (h > 0 ? h + '시간 ' : '') + m + '분';
+  }
+
+  function waitHTML(g) {
+    return '<div class="gf-wait">팁오프까지 <b>' + esc(untilTip(g)) + '</b></div>';
+  }
+
+  function recentHTML(teamKey) {
+    var d = D.teams[teamKey];
+    var g = gameFor(teamKey);
+    var oppRow = null;
+    var table = (D.h2h && D.h2h.westTable) || [];
+    for (var i = 0; i < table.length; i++) {
+      if (table[i].abbr === g.opp) oppRow = { row: table[i], rank: i + 1 };
+    }
+    var oppLine = oppRow
+      ? '<div class="gf-recent opp-line"><span class="d">상대 ' + esc(oppAb(g.opp)) + '</span>' +
+        '<span class="opp">' + esc(oppRow.row.name) + '</span>' +
+        '<span class="sc">서부 ' + oppRow.rank + '위 · ' + esc(oppRow.row.record) + '</span></div>'
+      : '';
+    return oppLine + '<div class="gf-sub">' + esc(TEAM[teamKey].name) + ' 최근 5경기</div>' +
+      d.recent.map(function (r) {
+        return '<div class="gf-recent">' +
+          '<span class="d">' + esc(r.date) + '</span>' +
+          '<span class="ha">' + esc(r.ha) + '</span>' +
+          '<span class="opp">' + esc(r.oppName) + '</span>' +
+          '<span class="res ' + (r.result === 'W' ? 'W' : 'L') + '">' + esc(r.result) + '</span>' +
+          '<span class="sc">' + esc(r.score) + (r.ot ? ' OT' : '') + '</span>' +
+        '</div>';
+      }).join('');
+  }
+
+  function feedBodyHTML() {
+    var g = chosenGame();
+    var l = state.live[g.id];
+    var rows = state.pbp[g.id] || [];
+    var link = '<a class="pbp-link" href="' + NAVER + '" target="_blank" rel="noopener">네이버 스포츠 ↗</a>';
     if (!l || l.state === 'pre') {
-      var tips = GAMES.map(function (g) {
-        return hhmm(new Date(g.iso));
-      }).join(' / ');
-      return '<div class="pbp-note">' +
-        '<span class="pbp-hint">경기 시작 전 · ' + esc(tips) + ' 팁오프 시 실시간 문자중계가 자동 시작됩니다</span>' +
-        '<a class="pbp-link" href="' + NAVER + '" target="_blank" rel="noopener">네이버 스포츠 NBA ↗</a>' +
-      '</div>';
+      return '<div class="pbp-note"><span class="pbp-hint">경기 시작 전 · ' + esc(g.time) +
+        ' 팁오프 · 시작되면 이 자리에 문자중계가 자동으로 흐릅니다</span>' + link + '</div>' +
+        waitHTML(g) + recentHTML(g.team);
     }
     if (!rows.length) {
       var lp = l.lastPlay;
-      if (lp) return '<div class="pbp-rows"><div class="pbp-row"><span class="pt">' + esc(lp) + '</span></div></div>';
-      return '<div class="pbp-note"><span class="pbp-hint">문자중계 준비 중…</span>' +
-        '<a class="pbp-link" href="' + NAVER + '" target="_blank" rel="noopener">네이버 스포츠 NBA ↗</a></div>';
+      return '<div class="pbp-rows">' +
+        (lp ? '<div class="pbp-row scoring"><span class="pt">' + esc(lp) + '</span></div>' : '') +
+        '<div class="pbp-note"><span class="pbp-hint">문자중계 준비 중…</span>' + link + '</div></div>';
     }
-    return '<div class="pbp-rows">' + rows.map(function (r) {
-      var q = (r.period && r.period !== '1' && r.period !== '2' && r.period !== '3' && r.period !== '4')
-        ? (r.period === 'OT' || Number(r.period) > 4 ? '연장' : r.period + 'Q') : (r.period ? r.period + 'Q' : '');
-      return '<div class="pbp-row' + (r.scoring ? ' scoring' : '') + '">' +
-        '<span class="pt-period">' + esc(q || '·') + '</span>' +
-        '<span class="pt-clock">' + esc(r.clock || '') + '</span>' +
-        '<span class="pt">' + esc(r.text) + '</span>' +
-        '<span class="pt-score">' + (r.away != null ? esc(r.away) + '-' + esc(r.home) : '') + '</span>' +
-      '</div>';
-    }).join('') + '</div>';
+    return '<div class="pbp-rows">' + rows.map(pbpRowHTML).join('') + '</div>';
   }
 
-  function paintPbp() {
-    var body = el('pbp-body');
-    if (!body) return;
-    var g = GAMES.filter(function (x) { return x.id === state.pbpGame; })[0] || GAMES[0];
-    body.innerHTML = pbpRowsHTML(g);
-    body.setAttribute('data-open', state.pbpOpen ? '1' : '0');
-    var sel = el('pbp-sel');
-    if (sel) {
-      sel.querySelectorAll('button').forEach(function (b) {
-        b.classList.toggle('on', b.getAttribute('data-g') === state.pbpGame);
-        var l = state.live[b.getAttribute('data-g')];
-        var dot = l && l.state === 'in' ? '<i class="pd"></i>' : '';
-        var g2 = GAMES.filter(function (x) { return x.id === b.getAttribute('data-g'); })[0];
-        if (g2) b.innerHTML = dot + esc(TEAM[g2.team].abbr) + '–' + esc(g2.opp);
-      });
-    }
-    var tog = el('pbp-toggle');
-    if (tog) tog.textContent = state.pbpOpen ? '접기' : '펼치기';
+  function gameSkeletonHTML() {
+    return '<div class="gswitch" id="gswitch"></div>' +
+      '<div class="ghero-slot" id="ghero"></div>' +
+      '<div class="gkey-slot" id="gkey"></div>' +
+      '<div class="gfeed">' +
+        '<div class="gf-head" id="gf-head"></div>' +
+        '<div class="gf-body" id="gf-body"></div>' +
+      '</div>';
+  }
+
+  function paintGame() {
+    var half = el('game-half');
+    if (!half) return;
+    if (!el('gf-body')) half.innerHTML = gameSkeletonHTML();
+    var body = el('gf-body');
+    var keep = body ? body.scrollTop : 0;
+    el('gswitch').innerHTML = switchHTML();
+    el('ghero').innerHTML = heroHTML();
+    el('gkey').innerHTML = '<div class="gkey-scroll">' + keyInfoHTML() + '</div>' + pickGroupHTML();
+    el('gf-head').innerHTML = feedHeadHTML();
+    if (body) { body.innerHTML = feedBodyHTML(); body.scrollTop = keep; }
   }
 
   /* ---------------- 랜딩 ---------------- */
@@ -374,7 +477,7 @@
 
   function profileBadgeHTML() {
     if (!state.profile) {
-      return '<span class="profile-badge idle"><span class="dot" style="background:#6f6f83"></span>프로필 선택</span>';
+      return '<span class="profile-badge idle"><span class="dot" style="background:#9aa3b2"></span>프로필 선택</span>';
     }
     var p = curProfile();
     return '<span class="profile-badge ' + p.cls + '">' +
@@ -486,73 +589,6 @@
     '<main class="content" id="content"></main>';
   }
 
-  function scoreblockHTML() {
-    return '<div class="scorebar">' +
-      '<div class="score-cards" id="score-cards"></div>' +
-      '<div class="score-meta" id="score-meta"></div>' +
-    '</div>';
-  }
-
-  function pbpHTML() {
-    return '<section class="pbp" id="pbp">' +
-      '<div class="pbp-head">' +
-        '<span class="pbp-title">📻 문자중계</span>' +
-        '<div class="pbp-sel" id="pbp-sel">' +
-          GAMES.map(function (g) {
-            var t = TEAM[g.team];
-            return '<button data-g="' + g.id + '" data-act="pbp-sel">' + esc(t.abbr) + '–' + esc(g.opp) + '</button>';
-          }).join('') +
-        '</div>' +
-        '<button class="pbp-toggle" id="pbp-toggle" data-act="pbp-toggle">펼치기</button>' +
-      '</div>' +
-      '<div class="pbp-body" id="pbp-body" data-open="0"></div>' +
-    '</section>';
-  }
-
-  function miniTeamHTML(key) {
-    var t = D.teams[key];
-    var pl = D.players[key === 'lal' ? 'doncic' : 'curry'];
-    var tab = key === 'lal' ? 'lakers' : 'warriors';
-    var inj = pl.key === 'curry' ? '<span class="mini-out">부상 결장</span>' : '<span class="mini-inj">부상 ' + t.injuries.length + '</span>';
-    return '<button class="mini-team ' + key + '" data-act="tab" data-tab="' + tab + '">' +
-      '<span class="mt-top">' +
-        '<img src="' + t.logo + '" alt="">' +
-        '<b>' + esc(TEAM[key].name) + '</b>' +
-        '<span class="rec">' + esc(t.record) + '</span>' +
-        '<span class="seed">서부 ' + t.confRank + '위</span>' +
-        '<span class="streak ' + (t.streakType === 'W' ? 'hot' : 'cold') + '">' + esc(t.streak) + '</span>' +
-        '<span class="go">자세히 →</span>' +
-      '</span>' +
-      '<span class="mt-line">' +
-        '<span>' + esc(pl.name) + ' <b>' + esc(pl.season.pts) + '</b>점 · <b>' + esc(pl.season.reb) + '</b>리바 · <b>' + esc(pl.season.ast) + '</b>어시</span>' +
-        inj +
-      '</span>' +
-    '</button>';
-  }
-
-  function pickStripHTML() {
-    var key = curProfile().team;
-    var t = D.teams[key];
-    var kt = TEAM[key];
-    var game = GAMES.filter(function (g) { return g.team === key; })[0];
-    var picks = getPicks()[game.id] || {};
-    var mine = picks[state.profile];
-    function opt(abbr, name, logo) {
-      var sel = mine && mine.team === abbr;
-      return '<button class="pick-opt' + (sel ? ' sel' : '') + '" data-act="pick" data-game="' + esc(game.id) + '" data-pick="' + esc(abbr) + '">' +
-        '<img src="' + logo + '" alt="">' + esc(name) + '</button>';
-    }
-    var sp = picks.sando ? (picks.sando.team === t.abbr ? kt.name : ko(game.opp)) : '—';
-    var wp = picks.woonggyo ? (picks.woonggyo.team === t.abbr ? kt.name : ko(game.opp)) : '—';
-    return '<div class="pick-strip">' +
-      '<div class="ps-hd"><span>🏀 오늘의 승부예측</span><span class="ps-game">' + esc(t.abbr) + (game.ha === '@' ? ' @ ' : ' vs ') + esc(game.opp) + ' · ' + esc(game.time) + '</span></div>' +
-      '<div class="ps-body">' +
-        opt(t.abbr, kt.name, t.logo) + opt(game.opp, ko(game.opp), oppLogo(game.opp)) +
-        '<span class="ps-picks">산도 <b class="s">' + esc(sp) + '</b> · 웅교 <b class="w">' + esc(wp) + '</b></span>' +
-      '</div>' +
-    '</div>';
-  }
-
   function chatHalfHTML() {
     var p = curProfile();
     return '<section class="chat-half">' +
@@ -571,10 +607,7 @@
 
   function chatTabHTML() {
     return '<div class="room-split">' +
-      '<section class="info-half" id="info-half">' +
-        scoreblockHTML() + pbpHTML() +
-        '<div class="mini-info">' + miniTeamHTML('lal') + miniTeamHTML('gs') + pickStripHTML() + '</div>' +
-      '</section>' +
+      '<section class="game-half" id="game-half"></section>' +
       chatHalfHTML() +
     '</div>';
   }
@@ -587,7 +620,7 @@
     else if (state.tab === 'warriors') c.innerHTML = teamPanelHTML('gs');
     else c.innerHTML = h2hHTML();
     if (state.tab === 'chat') {
-      paintScoreboard();
+      paintGame();
       renderTimeline();
       focusComposer(false);
     } else {
@@ -721,8 +754,8 @@
           statHTML(pl.season.min, 'MIN') +
         '</div>' +
         '<div class="split">' +
-          '<span>FG <b>' + esc(pl.season.fgPct) + '%</b> <span style="color:#4a4a5c">(' + esc(pl.season.fga) + ')</span></span>' +
-          '<span>3P <b>' + esc(pl.season.tpPct) + '%</b> <span style="color:#4a4a5c">(' + esc(pl.season.tpa) + ')</span></span>' +
+          '<span>FG <b>' + esc(pl.season.fgPct) + '%</b> <span style="color:#8d95a3">(' + esc(pl.season.fga) + ')</span></span>' +
+          '<span>3P <b>' + esc(pl.season.tpPct) + '%</b> <span style="color:#8d95a3">(' + esc(pl.season.tpa) + ')</span></span>' +
           '<span>FT <b>' + esc(pl.season.ftPct) + '%</b></span>' +
           '<span>STL <b>' + esc(pl.season.stl) + '</b> · BLK <b>' + esc(pl.season.blk) + '</b> · TO <b>' + esc(pl.season.to) + '</b></span>' +
         '</div>' +
@@ -741,7 +774,7 @@
         '<div><b>' + esc(pl.name) + '</b> ' + esc(lg.min) + '분 · <b>' + esc(lg.pts) + '점 ' + esc(lg.reb) + '리바 ' + esc(lg.ast) + '어시</b>' +
           ' (FG ' + esc(lg.fg) + ', 3P ' + esc(lg.tp) + ', FT ' + esc(lg.ft) + ')</div>' +
         (pl.key === 'curry'
-          ? '<div style="color:#ffb3b3">이 경기 6분만 뛰고 복사근 부상으로 이탈 — 이후 3경기 연속 결장</div>'
+          ? '<div style="color:#b3261e">이 경기 6분만 뛰고 복사근 부상으로 이탈 — 이후 3경기 연속 결장</div>'
           : '') +
       '</div>' +
     '</div>';
@@ -754,7 +787,7 @@
         '<span class="opp"><span class="ha">' + esc(g.ha) + '</span><img src="' + oppLogo(g.opp) + '" alt="">' +
           '<span class="nm">' + esc(g.oppName) + '</span></span>' +
         '<span class="sc"><span class="res ' + g.result + '">' + g.result + '</span>' +
-          '<span class="num">' + esc(g.score) + (g.ot ? ' <span style="color:#9b9bad;font-size:9px">OT</span>' : '') + '</span></span>' +
+          '<span class="num">' + esc(g.score) + (g.ot ? ' <span style="color:#8d95a3;font-size:9px">OT</span>' : '') + '</span></span>' +
       '</div>';
     }).join('') + '</div>';
 
@@ -765,7 +798,7 @@
         '<span class="d">' + esc(g.date) + (g.today ? ' <span class="today-tag">오늘</span>' : '') + '</span>' +
         '<span class="opp"><span class="ha">' + esc(g.ha) + '</span><img src="' + oppLogo(g.opp) + '" alt="">' +
           '<span class="nm">' + esc(g.oppName) + '</span></span>' +
-        '<span class="sc"><span style="color:#e8c476;font-weight:800;font-size:10.5px">' + esc(g.time) + '</span></span>' +
+        '<span class="sc"><span style="color:#9a6700;font-weight:800;font-size:10.5px">' + esc(g.time) + '</span></span>' +
       '</div>';
     }).join('') + '</div>';
 
@@ -868,7 +901,7 @@
         '<div class="score">' +
           '<div class="t"><img src="' + away.logo + '" alt="">' + esc(away.abbr) + '</div>' +
           '<span class="n' + (hWin ? ' lose' : '') + '">' + as + '</span>' +
-          '<span style="color:#6f6f83">:</span>' +
+          '<span style="color:#8d95a3">:</span>' +
           '<span class="n' + (hWin ? '' : ' lose') + '">' + hs + '</span>' +
           '<div class="t"><img src="' + home.logo + '" alt="">' + esc(home.abbr) + '</div>' +
         '</div>' +
@@ -887,7 +920,7 @@
         '<span class="d">' + esc(g.date) + '</span>' +
         '<span class="opp"><img src="' + away.logo + '" alt=""><span class="nm">' + esc(away.abbr) + '</span>' +
           '<span class="ha">@</span><img src="' + home.logo + '" alt=""><span class="nm">' + esc(home.abbr) + '</span></span>' +
-        '<span class="sc"><span style="color:#e8c476;font-weight:800;font-size:10.5px">' + esc(g.time) + '</span></span>' +
+        '<span class="sc"><span style="color:#9a6700;font-weight:800;font-size:10.5px">' + esc(g.time) + '</span></span>' +
       '</div>';
     }).join('');
 
@@ -928,7 +961,7 @@
     out += '<div class="sec-title">서부 컨퍼런스 순위 <span class="ln"></span></div>';
     out += '<div class="game-list">' + H.westTable.slice(0, 15).map(function (r, i) {
       var me = r.abbr === 'LAL' || r.abbr === 'GS';
-      return '<div class="game-row"' + (me ? ' style="border-color:rgba(253,185,39,.25);background:rgba(253,185,39,.05)"' : '') + '>' +
+      return '<div class="game-row"' + (me ? ' style="border-color:rgba(154,103,0,.28);background:rgba(253,185,39,.14)"' : '') + '>' +
         '<span class="d">' + (i + 1) + '</span>' +
         '<span class="opp"><img src="' + oppLogo(r.abbr) + '" alt=""><span class="nm">' + esc(r.name) + '</span>' +
           (me ? ' <span class="today-tag">' + (r.abbr === 'LAL' ? '산도' : '웅교') + '</span>' : '') + '</span>' +
@@ -983,18 +1016,9 @@
       tab = 'chat';
     }
     state.tab = tab;
-    state.pbpGame = autoGame();
+    if (!state.game) state.game = pickGameDefault();
     app.innerHTML = roomHTML() + (state.modal ? modalHTML() : '') + '<div class="toast" id="toast" hidden></div>';
     renderContent();
-    paintPbp();
-  }
-
-  function autoGame() {
-    var live = GAMES.filter(function (g) { var l = state.live[g.id]; return l && l.state === 'in'; });
-    if (live.length) return live[0].id;
-    var pre = GAMES.filter(function (g) { var l = state.live[g.id]; return !l || l.state === 'pre'; });
-    if (pre.length) return pre[0].id;
-    return GAMES[0].id;
   }
 
   function toast(text) {
@@ -1008,6 +1032,10 @@
 
   function enter(who) {
     if (!PROFILES[who]) return;
+    if (PROFILES[who].team !== (curProfile() ? curProfile().team : null)) {
+      state.game = PROFILES[who].team;
+      state.gamePicked = false;
+    }
     state.profile = who;
     store.set(K.profile, who);
     state.modal = null;
@@ -1071,14 +1099,8 @@
       Promise.resolve(pollLive()).then(function () { setTimeout(function () { t.classList.remove('spin'); }, 600); });
       return;
     }
-    if (act === 'pbp-toggle') {
-      state.pbpOpen = !state.pbpOpen;
-      paintPbp();
-      return;
-    }
-    if (act === 'pbp-sel') {
-      state.pbpGame = t.getAttribute('data-g');
-      paintPbp();
+    if (act === 'game-sel') {
+      selectGame(t.getAttribute('data-g'));
       return;
     }
     if (act === 'pick') {
@@ -1086,13 +1108,9 @@
       var g = GAMES.filter(function (x) { return x.id === gid; })[0];
       if (!g) g = D.teams.lal.nextGame.id === gid ? { id: gid, team: 'lal', opp: D.teams.lal.nextGame.opp } : { id: gid, team: 'gs', opp: D.teams.gs.nextGame.opp };
       postPick(g, pick);
-      var strip = document.querySelector('.pick-strip');
-      if (strip) {
-        var holder = document.createElement('div');
-        holder.innerHTML = pickStripHTML();
-        strip.replaceWith(holder.firstElementChild);
-      }
-      if (state.tab !== 'chat') {
+      if (state.tab === 'chat') {
+        paintGame();
+      } else {
         var sc = el('content').scrollTop;
         renderContent();
         el('content').scrollTop = sc;
